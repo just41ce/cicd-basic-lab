@@ -5,6 +5,10 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# Node.js 24 환경을 강제로 사용하여 경고 해결
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -12,7 +16,6 @@ concurrency:
 jobs:
   ci:
     runs-on: ubuntu-latest
-    # 루트에 소스가 있으므로 defaults 설정은 아예 뺐습니다.
     
     outputs:
       artifact_name: ${{ steps.set-name.outputs.value }}
@@ -29,6 +32,7 @@ jobs:
           cache: maven
 
       - name: Maven 빌드
+        # 루트에서 바로 실행되도록 경로 수정 완료
         run: mvn -B package -DskipTests
 
       - name: JAR 파일명 정리
