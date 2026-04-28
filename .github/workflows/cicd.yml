@@ -1,10 +1,19 @@
+name: CI/CD - cicd-basic-lab to mylab-bastion
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   ci:
     runs-on: ubuntu-latest
-    # defaults: # 이 부분은 이제 필요 없으므로 삭제하거나 주석 처리
-    #   run:
-    #     working-directory: ./cicd-basic-lab
-
+    # 루트에 소스가 있으므로 defaults 설정은 아예 뺐습니다.
+    
     outputs:
       artifact_name: ${{ steps.set-name.outputs.value }}
 
@@ -20,7 +29,6 @@ jobs:
           cache: maven
 
       - name: Maven 빌드
-        # 루트에 pom.xml이 있으므로 경로 없이 바로 실행 가능
         run: mvn -B package -DskipTests
 
       - name: JAR 파일명 정리
@@ -34,6 +42,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.set-name.outputs.value }}
-          # 하위 폴더 경로를 지우고 루트 기준인 target/app.jar로 수정
           path: target/app.jar
           retention-days: 1
