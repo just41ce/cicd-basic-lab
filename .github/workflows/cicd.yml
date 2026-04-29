@@ -5,7 +5,7 @@ on:
     branches: [main]
   workflow_dispatch:
 
-# Node.js 24 환경 강제 (경고 제거용)
+# Node.js 24 환경 강제 (경고 제거)
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
@@ -16,10 +16,7 @@ concurrency:
 jobs:
   ci:
     runs-on: ubuntu-latest
-    # 모든 run 단계의 기본 경로를 폴더 내부로 설정
-    defaults:
-      run:
-        working-directory: ./cicd-basic-lab
+    # 루트에 파일들이 있으므로 working-directory 설정을 삭제했습니다.
     
     outputs:
       image_tag: ${{ steps.tag.outputs.value }}
@@ -36,6 +33,7 @@ jobs:
           cache: maven
 
       - name: "Build with Maven"
+        # 루트에 있는 mvn 명령어를 바로 실행합니다.
         run: mvn -B package -DskipTests
 
       - name: "Clean up JAR filename"
@@ -43,7 +41,6 @@ jobs:
 
       - name: "Create Image Tag"
         id: tag
-        # 여기서도 폴더 경로를 명시하여 태그 생성
         run: |
           SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
           TAG="${{ vars.DOCKERHUB_USERNAME }}/cicd-basic-lab:${{ github.run_number }}-$SHORT_SHA"
@@ -61,8 +58,8 @@ jobs:
       - name: "Build and Push Image"
         uses: docker/build-push-action@v6
         with:
-          # Dockerfile이 들어있는 폴더를 context로 지정 (이게 핵심입니다)
-          context: ./cicd-basic-lab
+          # 스크린샷 구조에 맞춰 컨텍스트를 루트(.)로 설정합니다.
+          context: .
           push: true
           tags: |
             ${{ steps.tag.outputs.value }}
