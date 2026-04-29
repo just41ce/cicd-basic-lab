@@ -5,6 +5,10 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# Node.js 24 환경 강제 (경고 제거용)
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -12,8 +16,14 @@ concurrency:
 jobs:
   ci:
     runs-on: ubuntu-latest
+    # 모든 run 단계의 기본 경로를 폴더 내부로 설정
+    defaults:
+      run:
+        working-directory: ./cicd-basic-lab
+    
     outputs:
       image_tag: ${{ steps.tag.outputs.value }}
+      
     steps:
       - name: "Checkout source code"
         uses: actions/checkout@v4
@@ -33,6 +43,7 @@ jobs:
 
       - name: "Create Image Tag"
         id: tag
+        # 여기서도 폴더 경로를 명시하여 태그 생성
         run: |
           SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
           TAG="${{ vars.DOCKERHUB_USERNAME }}/cicd-basic-lab:${{ github.run_number }}-$SHORT_SHA"
@@ -50,7 +61,8 @@ jobs:
       - name: "Build and Push Image"
         uses: docker/build-push-action@v6
         with:
-          context: .
+          # Dockerfile이 들어있는 폴더를 context로 지정 (이게 핵심입니다)
+          context: ./cicd-basic-lab
           push: true
           tags: |
             ${{ steps.tag.outputs.value }}
