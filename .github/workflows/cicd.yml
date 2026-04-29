@@ -1,5 +1,3 @@
-# .github/workflows/cicd.yml — 단계 3: OIDC + Docker Hub + SSM
-
 name: "CI/CD - cicd-basic-lab to mylab-bastion (OIDC + SSM)"
 
 on:
@@ -7,7 +5,6 @@ on:
     branches: [main]
   workflow_dispatch:
 
-# [빈칸 1]: OIDC 토큰 발급을 위한 필수 권한
 permissions:
   id-token: write
   contents: read
@@ -19,8 +16,6 @@ concurrency:
 jobs:
   ci:
     runs-on: ubuntu-latest
-    # 루트 경로에 파일이 있으므로 working-directory 설정을 삭제했습니다.
-    
     outputs:
       image_tag: ${{ steps.tag.outputs.value }}
     steps:
@@ -58,7 +53,6 @@ jobs:
       - name: 이미지 빌드 및 Push
         uses: docker/build-push-action@v6
         with:
-          # 루트 경로 기준으로 수정
           context: .
           push: true
           tags: |
@@ -75,10 +69,8 @@ jobs:
         run: echo "배포 이미지: ${{ needs.ci.outputs.image_tag }}"
 
       - name: AWS 자격증명 설정 (OIDC)
-        # [빈칸 2]: configure-aws-credentials 액션 사용
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          # [빈칸 3]: IAM Role ARN 및 리전 참조
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
 
@@ -87,12 +79,11 @@ jobs:
 
       - name: SSM Send-Command로 EC2 배포
         id: ssm
-        # [빈칸 4]: SSM SendCommand 호출 (instance-ids 부분 수정 완료)
         run: |
           COMMAND_ID=$(aws ssm send-command \
             --instance-ids ${{ vars.EC2_INSTANCE_ID }} \
             --document-name "AWS-RunShellScript" \
-            --comment "Deploy cicd-basic-lab run #${{ github.run_number }}" \
+            --comment "Deploy run #${{ github.run_number }}" \
             --parameters '{"commands":[
               "docker pull ${{ needs.ci.outputs.image_tag }}",
               "docker stop cicd-basic-lab || true",
@@ -104,12 +95,10 @@ jobs:
             --query "Command.CommandId" \
             --output text)
           echo "command_id=$COMMAND_ID" >> $GITHUB_OUTPUT
-          echo "SSM Command ID: $COMMAND_ID"
 
       - name: SSM 명령 결과 대기 및 확인
-        # [빈칸 5]: 결과 대기 후 출력
         run: |
-          echo "SSM 명령이 실행될 때까지 잠시 대기합니다 (15초)..."
+          echo "명령 실행 중... (15초 대기)"
           sleep 15
           aws ssm get-command-invocation \
             --command-id "${{ steps.ssm.outputs.command_id }}" \
