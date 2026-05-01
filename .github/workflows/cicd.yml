@@ -37,13 +37,12 @@ jobs:
           distribution: 'temurin'
           cache: 'maven'
 
+      # working-directory 제거 (루트에서 실행)
       - name: Build with Maven
-        working-directory: cicd-basic-lab
         run: mvn clean package -DskipTests -B
 
-      # [추가됨] Dockerfile이 target/app.jar를 찾을 수 있도록 파일명 변경 필수
+      # working-directory 제거 (루트에서 실행)
       - name: JAR 파일명 정리
-        working-directory: cicd-basic-lab
         run: mv ./target/*.jar ./target/app.jar
 
       - name: Configure AWS credentials (OIDC)
@@ -57,10 +56,9 @@ jobs:
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
+      # working-directory 제거 (루트에서 실행)
       - name: Build, tag and push image to ECR
-        working-directory: cicd-basic-lab
         env:
-          # [수정됨] 빈칸 채우기: steps.login-ecr.outputs.registry
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
         run: |
           SHORT_SHA="${{ github.sha }}"
@@ -71,11 +69,9 @@ jobs:
           docker build -t ${IMAGE_URI} .
           docker push ${IMAGE_URI}
 
-          # working-directory 스텝에서 GITHUB_OUTPUT 직접 쓰면 cd Job 전달 불가
           # GITHUB_ENV로 다음 스텝에 전달
           echo "IMAGE_TAG=${TAG}" >> $GITHUB_ENV
 
-      # working-directory 없이 실행해야 GITHUB_OUTPUT 정상 동작
       - name: Export image outputs
         id: build-push
         run: |
@@ -99,17 +95,12 @@ jobs:
           role-session-name: GitHubActions-CD-${{ github.run_id }}
 
       # ACCOUNT_ID 플레이스홀더 치환
-      # find로 동적 탐색 (경로 중복 문제 회피)
       - name: Inject Account ID into task definition
         run: |
-          # [수정됨] query의 ACCOUNT를 대소문자를 구분하는 JMESPath 규칙에 맞게 Account로 변경
           ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
           TASK_DEF_PATH=$(find $GITHUB_WORKSPACE -name "task-definition.json" | head -1)
           sed -i "s/ACCOUNT_ID/${ACCOUNT_ID}/g" ${TASK_DEF_PATH}
 
-      # . / 포함 값은 Job outputs 전달 불가
-      # → image-repo-tag (mylab-backend:36-761c224) 만 전달받고
-      # → cd Job에서 ECR registry 주소를 직접 조합
       - name: Render new task definition with updated image
         id: task-def
         uses: aws-actions/amazon-ecs-render-task-definition@v1
@@ -119,10 +110,9 @@ jobs:
           image:           ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ needs.ci.outputs.image-repo-tag }}
 
       - name: Deploy to ECS (Rolling Update)
-        # [수정됨] 하위 버전의 경고를 피하기 위해 v2로 올림
         uses: aws-actions/amazon-ecs-deploy-task-definition@v2
         with:
           task-definition: ${{ steps.task-def.outputs.task-definition }}
           service:  ${{ env.ECS_SERVICE }}
           cluster:  ${{ env.ECS_CLUSTER }}
-          wait-for-service-stability: true # NEW TASK가 healthy + OLD TASK가 종료 여부 확인
+          wait-for-service-stability: true
