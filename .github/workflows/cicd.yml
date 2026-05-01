@@ -11,10 +11,10 @@ permissions:
 
 env:
   AWS_REGION: ap-northeast-2
-  ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}    # mylab-backend
-  ECS_CLUSTER:    ${{ vars.ECS_CLUSTER }}       # mylab-cluster
-  ECS_SERVICE:    ${{ vars.ECS_SERVICE }}       # mylab-backend-service
-  CONTAINER_NAME: ${{ vars.CONTAINER_NAME }}    # mylab-backend
+  ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+  ECS_CLUSTER:    ${{ vars.ECS_CLUSTER }}
+  ECS_SERVICE:    ${{ vars.ECS_SERVICE }}
+  CONTAINER_NAME: ${{ vars.CONTAINER_NAME }}
   TASK_DEFINITION: .aws/task-definition.json
 
 jobs:
@@ -24,15 +24,12 @@ jobs:
     runs-on: ubuntu-latest
 
     outputs:
-      image-uri: ${{ steps.build-push.outputs.image-uri }}
-      image-tag: ${{ steps.build-push.outputs.image-tag }}
+      image-repo-tag: ${{ steps.build-push.outputs.image-repo-tag }}
 
     steps:
-      # 1. 코드 체크아웃
       - name: Checkout
         uses: actions/checkout@v4
 
-      # 2. JDK 설정
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
@@ -40,15 +37,15 @@ jobs:
           distribution: 'temurin'
           cache: 'maven'
 
-      # 3. Maven 빌드 (working-directory 제거 -> 루트 경로 기준)
       - name: Build with Maven
+        working-directory: cicd-basic-lab
         run: mvn clean package -DskipTests -B
 
-      # 3-1. JAR 파일명 정리 (Dockerfile에서 COPY target/app.jar를 사용하므로 반드시 필요!)
+      # [추가됨] Dockerfile이 target/app.jar를 찾을 수 있도록 파일명 변경 필수
       - name: JAR 파일명 정리
+        working-directory: cicd-basic-lab
         run: mv ./target/*.jar ./target/app.jar
 
-      # 4. OIDC 인증
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -56,15 +53,14 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
           role-session-name: GitHubActions-CI-${{ github.run_id }}
 
-      # 5. ECR 로그인
       - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      # 6. Docker 빌드 + ECR Push (working-directory 제거 -> 루트 경로 기준)
       - name: Build, tag and push image to ECR
-        id: build-push
+        working-directory: cicd-basic-lab
         env:
+          # [수정됨] 빈칸 채우기: steps.login-ecr.outputs.registry
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
         run: |
           SHORT_SHA="${{ github.sha }}"
@@ -72,24 +68,25 @@ jobs:
           TAG="${{ github.run_number }}-${SHORT_SHA}"
           IMAGE_URI="${ECR_REGISTRY}/${{ env.ECR_REPOSITORY }}:${TAG}"
 
-          echo "빌드 이미지: ${IMAGE_URI}"
-
-          docker build \
-            --build-arg BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            --build-arg GIT_SHA="${SHORT_SHA}" \
-            -t ${IMAGE_URI} .
-
+          docker build -t ${IMAGE_URI} .
           docker push ${IMAGE_URI}
 
-          # Job 2 (cd) 로 이미지 URI 전달
-          echo "image-uri=${IMAGE_URI}" >> $GITHUB_OUTPUT
-          echo "image-tag=${TAG}"       >> $GITHUB_OUTPUT
+          # working-directory 스텝에서 GITHUB_OUTPUT 직접 쓰면 cd Job 전달 불가
+          # GITHUB_ENV로 다음 스텝에 전달
+          echo "IMAGE_TAG=${TAG}" >> $GITHUB_ENV
 
-  # 7. CD Job: ECR에 올라간 이미지를 ECS에 배포
+      # working-directory 없이 실행해야 GITHUB_OUTPUT 정상 동작
+      - name: Export image outputs
+        id: build-push
+        run: |
+          echo "image-repo-tag=${{ env.ECR_REPOSITORY }}:${IMAGE_TAG}" >> $GITHUB_OUTPUT
+
+
   cd:
     name: CD — Deploy to ECS
-    needs: ci
     runs-on: ubuntu-latest
+    needs: ci
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -101,18 +98,31 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
           role-session-name: GitHubActions-CD-${{ github.run_id }}
 
-      - name: Fill in the new image ID in the Amazon ECS task definition
+      # ACCOUNT_ID 플레이스홀더 치환
+      # find로 동적 탐색 (경로 중복 문제 회피)
+      - name: Inject Account ID into task definition
+        run: |
+          # [수정됨] query의 ACCOUNT를 대소문자를 구분하는 JMESPath 규칙에 맞게 Account로 변경
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          TASK_DEF_PATH=$(find $GITHUB_WORKSPACE -name "task-definition.json" | head -1)
+          sed -i "s/ACCOUNT_ID/${ACCOUNT_ID}/g" ${TASK_DEF_PATH}
+
+      # . / 포함 값은 Job outputs 전달 불가
+      # → image-repo-tag (mylab-backend:36-761c224) 만 전달받고
+      # → cd Job에서 ECR registry 주소를 직접 조합
+      - name: Render new task definition with updated image
         id: task-def
         uses: aws-actions/amazon-ecs-render-task-definition@v1
         with:
           task-definition: ${{ env.TASK_DEFINITION }}
-          container-name: ${{ env.CONTAINER_NAME }}
-          image: ${{ needs.ci.outputs.image-uri }}
+          container-name:  ${{ env.CONTAINER_NAME }}
+          image:           ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ needs.ci.outputs.image-repo-tag }}
 
-      - name: Deploy Amazon ECS task definition
+      - name: Deploy to ECS (Rolling Update)
+        # [수정됨] 하위 버전의 경고를 피하기 위해 v2로 올림
         uses: aws-actions/amazon-ecs-deploy-task-definition@v2
         with:
           task-definition: ${{ steps.task-def.outputs.task-definition }}
-          service: ${{ env.ECS_SERVICE }}
-          cluster: ${{ env.ECS_CLUSTER }}
-          wait-for-service-stability: true
+          service:  ${{ env.ECS_SERVICE }}
+          cluster:  ${{ env.ECS_CLUSTER }}
+          wait-for-service-stability: true # NEW TASK가 healthy + OLD TASK가 종료 여부 확인
